@@ -1,13 +1,11 @@
-//
-// Created by Rat on 31.08.19.
-//
-
 #ifndef OBS_GOOGLE_CAPTION_PLUGIN_CAPTION_OUTPUT_WRITER_H
 #define OBS_GOOGLE_CAPTION_PLUGIN_CAPTION_OUTPUT_WRITER_H
 
 #include "thirdparty/cameron314/blockingconcurrentqueue.h"
 #include "log.c"
 #include "SourceCaptioner.h"
+#include <locale>
+#include <codecvt> // Pour gérer l'encodage UTF-8
 
 static void caption_output_writer_loop(shared_ptr<CaptionOutputControl<int>> control, bool to_stream) {
     // TODO: minimum_time_between_captions arg to optionally hold next caption if still too soon after previous one
@@ -56,7 +54,7 @@ static void caption_output_writer_loop(shared_ptr<CaptionOutputControl<int>> con
         }
 
         if (caption_output.output_result->output_line == previous_line) {
-//            debug_log("ignoring duplicate %s line: %s", to_what.c_str(), previous_line.c_str());
+            // Ignorer les doublons
             continue;
         }
         previous_line = caption_output.output_result->output_line;
@@ -68,15 +66,11 @@ static void caption_output_writer_loop(shared_ptr<CaptionOutputControl<int>> con
             auto since_creation = chrono::steady_clock::now() - caption_output.output_result->caption_result.received_at;
             chrono::seconds wanted_delay(active_delay_sec);
 
-//            debug_log("since_creation %f", chrono::duration_cast<std::chrono::duration<double >>(since_creation).count());
-//            debug_log("wanted_delay %f", chrono::duration_cast<std::chrono::duration<double >>(wanted_delay).count());
-
             auto wait_left = wanted_delay - since_creation;
             if (wait_left > wanted_delay) {
                 info_log("capping delay, wtf, negative duration?, got %f, max %f",
                          chrono::duration_cast<std::chrono::duration<double >>(wait_left).count(),
-                         chrono::duration_cast<std::chrono::duration<double >>(wanted_delay).count()
-                );
+                         chrono::duration_cast<std::chrono::duration<double >>(wanted_delay).count());
                 wait_left = wanted_delay;
             }
 
@@ -84,7 +78,6 @@ static void caption_output_writer_loop(shared_ptr<CaptionOutputControl<int>> con
             debug_log("caption_output_writer_loop %s sleeping for %f seconds",
                       to_what.c_str(), waited_left_secs);
 
-            // release output before possible long thread sleep to not block a possible shutdown (or output change?)
             obs_output_release(output);
             output = nullptr;
 
@@ -105,11 +98,25 @@ static void caption_output_writer_loop(shared_ptr<CaptionOutputControl<int>> con
             }
         }
 
-        debug_log("sending caption %s line now, waited %f: '%s'",
-                  to_what.c_str(), waited_left_secs, caption_output.output_result->output_line.c_str());
+        // Correction : Gestion de l'encodage UTF-8 pour éviter les symboles incorrects
+        std::string caption_output_line = caption_output.output_result->output_line;
 
-        obs_output_output_caption_text2(output, caption_output.output_result->output_line.c_str(), 0.0);
+        try {
+            std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+            std::wstring wide_line = converter.from_bytes(caption_output_line); // Conversion UTF-8 vers wide_string
+            caption_output_line = converter.to_bytes(wide_line); // Reconvertir en UTF-8 après vérification
+        } catch (const std::range_error&) {
+            info_log("Erreur : encodage invalide détecté dans la ligne : '%s'", caption_output_line.c_str());
+            continue; // Ignorer cette ligne en cas d'erreur d'encodage
+        }
+
+        debug_log("sending caption %s line now, waited %f: '%s'",
+                  to_what.c_str(), waited_left_secs, caption_output_line.c_str());
+
+        // Envoyer le texte correctement encodé
+        obs_output_output_caption_text2(output, caption_output_line.c_str(), 0.0);
     }
+
     if (output) {
         obs_output_release(output);
         output = nullptr;
@@ -118,5 +125,5 @@ static void caption_output_writer_loop(shared_ptr<CaptionOutputControl<int>> con
     info_log("caption_output_writer_loop %s done", to_what.c_str());
 }
 
+#endif // OBS_GOOGLE_CAPTION_PLUGIN_CAPTION_OUTPUT_WRITER_H
 
-#endif //OBS_GOOGLE_CAPTION_PLUGIN_CAPTION_OUTPUT_WRITER_H
